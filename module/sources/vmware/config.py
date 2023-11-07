@@ -278,6 +278,17 @@ class VMWareConfig(ConfigBase):
                                 ConfigOption("host_tag_source", str),
                                 ConfigOption("vm_tag_source", str)
                               ]),
+            ConfigOptionGroup(title="tag prefix",
+                              description="""\
+                              For tags synced from vCenter to NetBox,
+                              Add this prefix
+                              """,
+                              config_example="Example: vm_tag_prefix = vCenter-",
+                              options=[
+                                ConfigOption("cluster_tag_prefix", str),
+                                ConfigOption("host_tag_prefix", str),
+                                ConfigOption("vm_tag_prefix", str)
+                              ]),
             ConfigOption("sync_custom_attributes",
                          bool,
                          description="""sync custom attributes defined for hosts and VMs
