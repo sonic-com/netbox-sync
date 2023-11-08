@@ -676,8 +676,9 @@ class VMWareHandler(SourceBase):
 
                 # noinspection PyBroadException
                 try:
-                    tag_name = self.tag_session.tagging.Tag.get(tag_id).name
-                    tag_description = self.tag_session.tagging.Tag.get(tag_id).description
+                    tag_prefix_source = f"NetBox-synced {self.name}"
+                    tag_name = f"VMWare {self.tag_session.tagging.Tag.get(tag_id).name}"
+                    tag_description = f"{tag_prefix_source} {self.tag_session.tagging.Tag.get(tag_id).description}"                     
                 except Exception as e:
                     log.error(f"Unable to retrieve vCenter tag '{tag_id}' for '{obj.name}': {e}")
                     continue
@@ -718,7 +719,7 @@ class VMWareHandler(SourceBase):
             tag_prefix = self.settings.host_tag_prefix
         elif isinstance(obj, vim.VirtualMachine):
             tag_source = self.settings.vm_tag_source
-            tag_source = self.settings.vm_tag_prefix
+            tag_prefix = self.settings.vm_tag_prefix
         else:
             raise ValueError(f"Tags for '{grab(obj, '_wsdlName')}' are not supported")
 
@@ -749,14 +750,6 @@ class VMWareHandler(SourceBase):
             datacenter = self.get_parent_object_by_class(obj, vim.Datacenter)
             if datacenter is not None:
                 tag_list.extend(self.get_vmware_object_tags(datacenter))
-
-        if len(self.settings.vm_tag_prefix) > 0:
-           new_tag_list = list()
-           for tag in tag_list:
-               tag.name = tag_prefix + tag.name
-               tag.description = tag_prefix + tag.description
-               new_tag_list.extend(tag)
-           tag_list = new_tag_list
 
         return tag_list
 
