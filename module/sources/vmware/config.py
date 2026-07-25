@@ -238,6 +238,15 @@ class VMWareConfig(ConfigBase):
                                        as "when-undefined"
                          """,
                          default_value="when-undefined"),
+            ConfigOption("preserve_primary_ips",
+                         bool,
+                         description="""defines if primary IP addresses of devices and VMs are protected from
+                         removal. If enabled, an IP address which is set as primary IPv4/IPv6 of a device or
+                         VM in NetBox will never be removed from its interface by this source, even if the
+                         source does not report this IP address (anymore). This prevents the primary IP from
+                         being unset when i.e. an outdated guest agent does not report all IP addresses.
+                         """,
+                         default_value=False),
             ConfigOption("skip_vm_comments",
                          bool,
                          description="Do not sync notes from a VM in vCenter to the comments field on a VM in netbox",
@@ -258,6 +267,25 @@ class VMWareConfig(ConfigBase):
                          description="""If the VMware Site Recovery Manager is used to can skip syncing
                          placeholder/replicated VMs from fail-over site to NetBox.""",
                          default_value=False),
+            ConfigOption("vm_status_on_create",
+                         str,
+                         description="""defines the status a VM gets assigned in NetBox when netbox-sync
+                         creates it as a new NetBox VM. Updates of already existing NetBox VMs are not
+                         affected by this option. This way new VMs can start their lifecycle in NetBox
+                         as i.e. 'planned' until changed manually in NetBox.
+                         possible values: offline, active, planned, staged, failed, decommissioning
+                         """,
+                         default_value="active"),
+            ConfigOption("vm_status_preserve",
+                         str,
+                         description="""defines a comma separated list of NetBox VM statuses which will be
+                         preserved on updates. If the current status of an existing NetBox VM matches one of
+                         these values then netbox-sync will not change the status of this VM. This way VMs
+                         can be kept in i.e. 'planned' or 'staged' until changed manually in NetBox.
+                         Set to an empty value to always update the VM status.
+                         possible values: offline, active, planned, staged, failed, decommissioning
+                         """,
+                         default_value="planned, staged, decommissioning"),
             ConfigOption("strip_host_domain_name",
                          bool,
                          description="strip domain part from host name before syncing device to NetBox",
@@ -544,6 +572,28 @@ class VMWareConfig(ConfigBase):
                 if option.value not in ["always", "when-undefined", "never"]:
                     log.error(f"Primary IP option '{option.key}' value '{option.value}' invalid.")
                     self.set_validation_failed()
+
+            # keep in sync with NBVM data_model status values in module/netbox/object_classes.py
+            valid_vm_statuses = ["offline", "active", "planned", "staged", "failed", "decommissioning"]
+
+            if option.key == "vm_status_on_create":
+                option.set_value(option.value.lower())
+                if option.value not in valid_vm_statuses:
+                    log.error(f"Config option '{option.key}' value '{option.value}' invalid. "
+                              f"Possible values: {', '.join(valid_vm_statuses)}")
+                    self.set_validation_failed()
+
+                continue
+
+            if option.key == "vm_status_preserve":
+                option.set_value([x.lower() for x in quoted_split(option.value) or list()])
+                for status_value in option.value:
+                    if status_value not in valid_vm_statuses:
+                        log.error(f"Config option '{option.key}' value '{status_value}' invalid. "
+                                  f"Possible values: {', '.join(valid_vm_statuses)}")
+                        self.set_validation_failed()
+
+                continue
 
             if option.key == "custom_dns_servers":
 
