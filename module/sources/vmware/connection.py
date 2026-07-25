@@ -613,7 +613,10 @@ class VMWareHandler(SourceBase):
 
             ip = None
             if device_primary_ip is not None and ip_needle is not None:
-                if isinstance(device_primary_ip, dict):
+                if isinstance(device_primary_ip, NBIPAddress):
+                    ip = grab(device_primary_ip, "data.address")
+
+                elif isinstance(device_primary_ip, dict):
                     ip = grab(device_primary_ip, "address")
 
                 elif isinstance(device_primary_ip, int):
@@ -1084,6 +1087,11 @@ class VMWareHandler(SourceBase):
         if device_vm_object is None:
             object_name = object_data.get(object_type.primary_key)
             log.debug(f"No existing {object_type.name} object for {object_name}. Creating a new {object_type.name}.")
+
+            if object_type == NBVM and self.settings.vm_status_on_create is not None and \
+                    object_data.get("status") is not None:
+                object_data["status"] = self.settings.vm_status_on_create
+
             device_vm_object = self.inventory.add_object(object_type, data=object_data, source=self)
         else:
 
@@ -1094,6 +1102,16 @@ class VMWareHandler(SourceBase):
             if object_type == NBDevice and self.settings.overwrite_device_platform is False and \
                     object_data.get("platform") is not None:
                 del object_data["platform"]
+
+            if object_type == NBVM and object_data.get("status") is not None:
+                current_status = grab(device_vm_object, "data.status")
+                if isinstance(current_status, dict):
+                    current_status = current_status.get("value")
+                if current_status in (self.settings.vm_status_preserve or list()):
+                    log.debug2(f"Current status '{current_status}' of "
+                               f"'{device_vm_object.get_display_name()}' is in 'vm_status_preserve' list. "
+                               f"Not updating VM status.")
+                    del object_data["status"]
 
             device_vm_object.update(data=object_data, source=self)
 
@@ -2584,6 +2602,25 @@ class VMWareHandler(SourceBase):
                     continue
 
                 nic_data[int_full_name] = vm_nic_data
+
+        # if VM has only one IPv4 on all interfaces, use it as primary IPv4 address
+        if vm_primary_ip4 is None:
+            potential_primary_ipv4_list = list()
+
+            for ip in [y for xs in nic_ips.values() for y in xs]:
+                # noinspection PyBroadException
+                try:
+                    ip_address_object = ip_interface(ip)
+                except Exception:
+                    continue
+
+                if ip_address_object.version == 4:
+                    potential_primary_ipv4_list.append(ip_address_object)
+
+            if len(potential_primary_ipv4_list) == 1:
+                log.debug(f"Found one IPv4 '{potential_primary_ipv4_list[0]}' address on all interfaces of "
+                          f"VM '{name}', using it as primary IPv4.")
+                vm_primary_ip4 = potential_primary_ipv4_list[0]
 
         # if VM has only one IPv6 on all interfaces, use it as primary IPv6 address
         if vm_primary_ip6 is None or True:
