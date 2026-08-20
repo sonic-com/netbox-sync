@@ -759,10 +759,11 @@ class VMWareHandler(SourceBase):
         tag_list: list
             list of NBTag objets retrieved from vCenter for this object
         """
-        if obj is None:
-            return
-
         tag_list = list()
+
+        if obj is None:
+            return tag_list
+
         if self.tag_session is not None:
 
             # noinspection PyBroadException
@@ -771,7 +772,7 @@ class VMWareHandler(SourceBase):
                     DynamicID(type=grab(obj, "_wsdlName"), id=grab(obj, "_moId")))
             except Exception as e:
                 log.error(f"Unable to retrieve vCenter tags for '{obj.name}': {e}")
-                return
+                return tag_list
 
             for tag_id in object_tag_ids:
 
