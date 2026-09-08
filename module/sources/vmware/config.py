@@ -247,6 +247,16 @@ class VMWareConfig(ConfigBase):
                          being unset when i.e. an outdated guest agent does not report all IP addresses.
                          """,
                          default_value=False),
+            ConfigOption("preserve_ip_prefix_length_subnets",
+                         str,
+                         description="""list of IP networks (same syntax as 'permitted_subnets') for which
+                         the prefix length of an already existing NetBox IP address is preserved instead
+                         of being overwritten with the prefix length reported by the source. Useful when
+                         a guest agent reports wrong netmasks for certain addresses (i.e. open-vm-tools on
+                         FreeBSD reports the primary address netmask for IPv4 alias/CARP addresses).
+                         Only the prefix length is preserved, the IP is still assigned/updated as usual.
+                         """,
+                         config_example="10.0.0.1/32, 192.168.10.0/24"),
             ConfigOption("skip_vm_comments",
                          bool,
                          description="Do not sync notes from a VM in vCenter to the comments field on a VM in netbox",
@@ -721,3 +731,12 @@ class VMWareConfig(ConfigBase):
                 self.set_validation_failed()
 
             permitted_subnets_option.set_value(permitted_subnets)
+
+        preserve_prefix_option = self.get_option_by_name("preserve_ip_prefix_length_subnets")
+
+        if preserve_prefix_option is not None and preserve_prefix_option.value is not None:
+            preserve_subnets = PermittedSubnets(preserve_prefix_option.value)
+            if preserve_subnets.validation_failed is True:
+                self.set_validation_failed()
+
+            preserve_prefix_option.set_value(preserve_subnets)
