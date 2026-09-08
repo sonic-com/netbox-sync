@@ -16,6 +16,7 @@ from packaging import version
 from module.netbox import *
 from module.common.logging import get_logger
 from module.common.misc import grab
+from module.sources.common.permitted_subnets import PermittedSubnets
 
 log = get_logger()
 
@@ -599,6 +600,17 @@ class SourceBase:
 
             if skip_this_ip is True:
                 continue
+
+            # keep NetBox prefix length for configured subnets (source reports wrong netmask)
+            preserve_subnets = getattr(self.settings, "preserve_ip_prefix_length_subnets", None)
+            if isinstance(this_ip_object, NBIPAddress) and isinstance(preserve_subnets, PermittedSubnets) \
+                    and any(ip_object.ip in net for net in preserve_subnets.included_subnets) \
+                    and not any(ip_object.ip in net for net in preserve_subnets.excluded_subnets):
+                current_address = grab(this_ip_object, "data.address")
+                if current_address is not None and current_address != ip_object.compressed:
+                    log.debug(f"Preserving NetBox prefix length of '{current_address}' instead of source "
+                              f"reported '{ip_object}' ('preserve_ip_prefix_length_subnets')")
+                    ip_object = ip_interface(current_address)
 
             nic_ip_data = {
                 "address": ip_object.compressed,
