@@ -132,6 +132,15 @@ class VMWareConfig(ConfigBase):
                          """,
                          config_example="backup-vm, veeam-job"
                          ),
+            ConfigOption("vm_exclude_by_datastore_filter",
+                         str,
+                         description="""defines a regex which is matched against the name of every datastore a VM
+                         has a virtual disk on. If it matches, this VM is excluded from being synced to NetBox.
+                         Useful to skip temporary VMs which a backup appliance runs from its own mount point.
+                         """,
+                         config_example="VeeamBackup_.*"
+                         ),
+
             ConfigOptionGroup(title="relations",
                               options=[
                                 ConfigOption("cluster_site_relation",

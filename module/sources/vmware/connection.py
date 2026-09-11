@@ -473,6 +473,29 @@ class VMWareHandler(SourceBase):
 
         return value.lower() in [x.lower() for x in VMWareHandler.unknown_hardware_identifiers]
 
+    @staticmethod
+    def get_datastore_name(disk_backing_file_name):
+        """
+        returns the datastore name a virtual disk is located on
+
+        Parameters
+        ----------
+        disk_backing_file_name: str
+            the 'backing.fileName' of a vim.vm.device.VirtualDisk, which looks
+            like "[datastore name] folder/disk.vmdk"
+
+        Returns
+        -------
+        str, None: the datastore name, None if the backing carries none (i.e. a raw device mapping)
+        """
+
+        file_name = f"{disk_backing_file_name}"
+
+        if not file_name.startswith("[") or "]" not in file_name:
+            return None
+
+        return file_name[1:].split("]")[0]
+
     def get_site_name(self, object_type, object_name, cluster_name=""):
         """
         Return a site name for a NBCluster or NBDevice depending on config options
@@ -2466,6 +2489,22 @@ class VMWareHandler(SourceBase):
             platform = self.get_object_relation(platform, "vm_platform_relation", fallback=platform)
 
         hardware_devices = grab(obj, "config.hardware.device", fallback=list())
+
+        # filter VMs by the datastores their virtual disks are located on
+        if self.settings.vm_exclude_by_datastore_filter is not None:
+            for vm_device in hardware_devices:
+
+                if not isinstance(vm_device, vim.vm.device.VirtualDisk):
+                    continue
+
+                datastore_name = self.get_datastore_name(grab(vm_device, "backing.fileName"))
+                if datastore_name is None:
+                    continue
+
+                if self.settings.vm_exclude_by_datastore_filter.match(datastore_name) is not None:
+                    log.debug(f"VM '{name}' has a virtual disk on datastore '{datastore_name}' which matches "
+                              f"'vm_exclude_by_datastore_filter'. Skipping")
+                    return
 
         annotation = None
         if self.settings.skip_vm_comments is False:
