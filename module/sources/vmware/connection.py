@@ -2248,6 +2248,24 @@ class VMWareHandler(SourceBase):
 
         hardware_devices = grab(obj, "config.hardware.device", fallback=list())
 
+        # filter VMs by the datastores their virtual disks are located on
+        if self.settings.vm_exclude_by_datastore_filter is not None:
+            for vm_device in hardware_devices:
+
+                if not isinstance(vm_device, vim.vm.device.VirtualDisk):
+                    continue
+
+                # disk file names look like "[datastore name] folder/disk.vmdk"
+                file_name = f'{grab(vm_device, "backing.fileName")}'
+                if not file_name.startswith("["):
+                    continue
+
+                datastore_name = file_name[1:].split("]")[0]
+                if self.settings.vm_exclude_by_datastore_filter.match(datastore_name) is not None:
+                    log.debug(f"VM '{name}' has a virtual disk on datastore '{datastore_name}' which matches "
+                              f"'vm_exclude_by_datastore_filter'. Skipping")
+                    return
+
         annotation = None
         if self.settings.skip_vm_comments is False:
             annotation = get_string_or_none(grab(obj, "config.annotation"))
