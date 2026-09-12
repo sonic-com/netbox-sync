@@ -130,6 +130,7 @@ class VMWareHandler(SourceBase):
         self.processed_host_names = dict()
         self.processed_vm_names = dict()
         self.processed_vm_uuid = list()
+        self.processed_objects = list()
         self.object_cache = dict()
         self.parsing_vms_the_first_time = True
         self.objects_to_reevaluate = list()
@@ -1086,6 +1087,18 @@ class VMWareHandler(SourceBase):
 
             device_vm_object = self.get_object_based_on_primary_ip(object_type, p_ipv4, p_ipv6)
 
+            # A primary IP match is the weakest match of them all. A cloned VM (a replica, or a
+            # backup appliance instant recovery mount) has a different name, different MACs and a
+            # different instance UUID, but its guest tools report the same IP as the original.
+            # Matching it here would rename the NetBox object of the VM it was cloned from and
+            # overwrite that object with the clone's data. Only trust this match if nothing else
+            # claimed the object during this run.
+            if device_vm_object is not None and device_vm_object in self.processed_objects:
+                log.warning(f"{object_type.name} '{object_data.get(object_type.primary_key)}' matches "
+                            f"'{device_vm_object.get_display_name()}' by primary IP only, but that object has "
+                            f"already been claimed during this run. Treating both as separate objects.")
+                device_vm_object = None
+
         if device_vm_object is None:
             object_name = object_data.get(object_type.primary_key)
             log.debug(f"No existing {object_type.name} object for {object_name}. Creating a new {object_type.name}.")
@@ -1116,6 +1129,10 @@ class VMWareHandler(SourceBase):
                     del object_data["status"]
 
             device_vm_object.update(data=object_data, source=self)
+
+        # remember which objects were claimed during this run, see the primary IP match above
+        if device_vm_object not in self.processed_objects:
+            self.processed_objects.append(device_vm_object)
 
         # add object to cache
         self.add_object_to_cache(vmware_object, device_vm_object)
