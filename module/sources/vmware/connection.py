@@ -446,6 +446,29 @@ class VMWareHandler(SourceBase):
 
         return True
 
+    @staticmethod
+    def get_datastore_name(disk_backing_file_name):
+        """
+        returns the datastore name a virtual disk is located on
+
+        Parameters
+        ----------
+        disk_backing_file_name: str
+            the 'backing.fileName' of a vim.vm.device.VirtualDisk, which looks
+            like "[datastore name] folder/disk.vmdk"
+
+        Returns
+        -------
+        str, None: the datastore name, None if the backing carries none (i.e. a raw device mapping)
+        """
+
+        file_name = f"{disk_backing_file_name}"
+
+        if not file_name.startswith("[") or "]" not in file_name:
+            return None
+
+        return file_name[1:].split("]")[0]
+
     def get_site_name(self, object_type, object_name, cluster_name=""):
         """
         Return a site name for a NBCluster or NBDevice depending on config options
@@ -2272,12 +2295,10 @@ class VMWareHandler(SourceBase):
                 if not isinstance(vm_device, vim.vm.device.VirtualDisk):
                     continue
 
-                # disk file names look like "[datastore name] folder/disk.vmdk"
-                file_name = f'{grab(vm_device, "backing.fileName")}'
-                if not file_name.startswith("["):
+                datastore_name = self.get_datastore_name(grab(vm_device, "backing.fileName"))
+                if datastore_name is None:
                     continue
 
-                datastore_name = file_name[1:].split("]")[0]
                 if self.settings.vm_exclude_by_datastore_filter.match(datastore_name) is not None:
                     log.debug(f"VM '{name}' has a virtual disk on datastore '{datastore_name}' which matches "
                               f"'vm_exclude_by_datastore_filter'. Skipping")
