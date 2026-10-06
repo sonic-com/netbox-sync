@@ -116,6 +116,14 @@ class VMWareConfig(ConfigBase):
                          """,
                          config_example="tag-a, tag-b"
                          ),
+            ConfigOption("host_exclude_by_tag_filter",
+                         str,
+                         description="""defines a comma separated list of vCenter tags which (if assigned to a
+                         host) will exclude this host from being synced to NetBox. The config option
+                         'host_tag_source' determines which tags are collected for hosts.
+                         """,
+                         config_example="tag-a, tag-b"
+                         ),
             ConfigOption("vm_exclude_by_datastore_filter",
                          str,
                          description="""defines a regex which is matched against the name of every datastore a VM
@@ -302,6 +310,15 @@ class VMWareConfig(ConfigBase):
                          can be kept in i.e. 'planned' or 'staged' until changed manually in NetBox.
                          Set to an empty value to always update the VM status.
                          possible values: offline, active, planned, staged, failed, decommissioning
+                         """,
+                         default_value="planned, staged, decommissioning"),
+            ConfigOption("host_status_preserve",
+                         str,
+                         description="""defines a comma separated list of NetBox device statuses which will be
+                         preserved on updates. If the current status of an existing NetBox device (host)
+                         matches one of these values then netbox-sync will not change the status of this
+                         device. Set to an empty value to always update the device status.
+                         possible values: offline, active, planned, staged, failed, inventory, decommissioning
                          """,
                          default_value="planned, staged, decommissioning"),
             ConfigOption("strip_host_domain_name",
@@ -517,7 +534,7 @@ class VMWareConfig(ConfigBase):
             if option.value is None:
                 continue
 
-            if "filter" in option.key and "vm_exclude_by_tag_filter" not in option.key:
+            if "filter" in option.key and "exclude_by_tag_filter" not in option.key:
 
                 re_compiled = None
                 try:
@@ -530,7 +547,7 @@ class VMWareConfig(ConfigBase):
 
                 continue
 
-            if option.key == "vm_exclude_by_tag_filter":
+            if option.key in ["vm_exclude_by_tag_filter", "host_exclude_by_tag_filter"]:
 
                 option.set_value(quoted_split(option.value))
 
@@ -593,6 +610,8 @@ class VMWareConfig(ConfigBase):
 
             # keep in sync with NBVM data_model status values in module/netbox/object_classes.py
             valid_vm_statuses = ["offline", "active", "planned", "staged", "failed", "decommissioning"]
+            # keep in sync with NBDevice data_model status values in module/netbox/object_classes.py
+            valid_device_statuses = valid_vm_statuses + ["inventory"]
 
             if option.key == "vm_status_on_create":
                 option.set_value(option.value.lower())
@@ -609,6 +628,16 @@ class VMWareConfig(ConfigBase):
                     if status_value not in valid_vm_statuses:
                         log.error(f"Config option '{option.key}' value '{status_value}' invalid. "
                                   f"Possible values: {', '.join(valid_vm_statuses)}")
+                        self.set_validation_failed()
+
+                continue
+
+            if option.key == "host_status_preserve":
+                option.set_value([x.lower() for x in quoted_split(option.value) or list()])
+                for status_value in option.value:
+                    if status_value not in valid_device_statuses:
+                        log.error(f"Config option '{option.key}' value '{status_value}' invalid. "
+                                  f"Possible values: {', '.join(valid_device_statuses)}")
                         self.set_validation_failed()
 
                 continue
