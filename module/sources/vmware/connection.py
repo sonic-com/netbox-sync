@@ -1140,14 +1140,15 @@ class VMWareHandler(SourceBase):
                     object_data.get("platform") is not None:
                 del object_data["platform"]
 
-            if object_type == NBVM and object_data.get("status") is not None:
+            if object_data.get("status") is not None:
+                preserve_option = "vm_status_preserve" if object_type == NBVM else "host_status_preserve"
                 current_status = grab(device_vm_object, "data.status")
                 if isinstance(current_status, dict):
                     current_status = current_status.get("value")
-                if current_status in (self.settings.vm_status_preserve or list()):
+                if current_status in (getattr(self.settings, preserve_option) or list()):
                     log.debug2(f"Current status '{current_status}' of "
-                               f"'{device_vm_object.get_display_name()}' is in 'vm_status_preserve' list. "
-                               f"Not updating VM status.")
+                               f"'{device_vm_object.get_display_name()}' is in '{preserve_option}' list. "
+                               f"Not updating {object_type.name} status.")
                     del object_data["status"]
 
             device_vm_object.update(data=object_data, source=self)
@@ -1742,7 +1743,16 @@ class VMWareHandler(SourceBase):
         host_tags = self.get_object_relation(name, "host_tag_relation")
 
         # get vCenter tags
-        host_tags.extend(self.collect_object_tags(obj))
+        vcenter_tags = self.collect_object_tags(obj)
+
+        # check if host tag excludes host from being synced to NetBox
+        vcenter_tag_names = [NetBoxObject.extract_tag_name(t) for t in vcenter_tags]
+        for sync_exclude_tag in self.settings.host_exclude_by_tag_filter or list():
+            if sync_exclude_tag in vcenter_tag_names:
+                log.debug(f"Host vCenter tag '{sync_exclude_tag}' matches 'host_exclude_by_tag_filter'. Skipping")
+                return
+
+        host_tags.extend(vcenter_tags)
 
         # prepare host data model
         host_data = {
