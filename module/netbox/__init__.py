@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2026 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2026 netbox-sync team. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -17,6 +17,8 @@ from module.netbox.object_classes import (
     NBTenant,
     NBSite,
     NBSiteGroup,
+    NBRegion,
+    NBLocation,
     NBVRF,
     NBVLAN,
     NBVLANList,
@@ -38,7 +40,11 @@ from module.netbox.object_classes import (
     NBMACAddress,
     NBFHRPGroupItem,
     NBInventoryItem,
-    NBPowerPort
+    NBPowerPort,
+    NBCable,
+    NBModuleType,
+    NBModuleBay,
+    NBModule
 )
 
 primary_tag_name = "NetBox-synced"
