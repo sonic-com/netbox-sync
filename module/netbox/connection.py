@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2026 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2026 netbox-sync team. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -9,6 +9,7 @@
 
 import json
 import os
+import re
 import pickle
 import pprint
 from datetime import datetime
@@ -152,8 +153,13 @@ class NetBoxHandler:
         requests.Session: session handler of new NetBox session
         """
 
+        # the config value is the bare token; a scheme typed in front of it
+        # ("Bearer nbt_...", "Token abc...") must not be sent twice
+        token = re.sub(r"^\s*(?:bearer|token)\s+", "", str(self.settings.api_token), flags=re.IGNORECASE).strip()
+        # NetBox 4.5+ API tokens (nbt_<key>.<token>) use the Bearer scheme
+        keyword = "Bearer" if token.startswith("nbt_") else "Token"
         header = {
-            "Authorization": f"Token {self.settings.api_token}",
+            "Authorization": f"{keyword} {token}",
             "User-Agent": f"netbox-sync/{__version__}",
             "Content-Type": "application/json"
         }
@@ -267,6 +273,11 @@ class NetBoxHandler:
 
             if "limit" not in params.keys():
                 params["limit"] = self.settings.default_netbox_result_limit
+
+            # rows tied on a non-unique default ordering have no stable position across pages,
+            # so a walk can repeat one and skip another; the primary key makes the sort total
+            if nb_id is None and "ordering" not in params:
+                params["ordering"] = "id"
 
             # always exclude config context
             params["exclude"] = "config_context"
@@ -478,8 +489,7 @@ class NetBoxHandler:
                         cache_this_class = False
 
             if self.testing_cache is True and len(cached_nb_data) > 0:
-                for object_data in cached_nb_data:
-                    self.inventory.add_object(nb_object_class, data=object_data, read_from_netbox=True)
+                self.inventory.load_from_netbox(nb_object_class, cached_nb_data)
 
                 # mark this object class as retrieved
                 self.resolved_dependencies.add(nb_object_class)
@@ -550,8 +560,7 @@ class NetBoxHandler:
 
             log.debug(f"Processing %s returned {nb_object_class.name}%s" % (len(nb_objects), plural(len(nb_objects))))
 
-            for object_data in nb_objects:
-                self.inventory.add_object(nb_object_class, data=object_data, read_from_netbox=True)
+            self.inventory.load_from_netbox(nb_object_class, nb_objects)
 
             # mark this object class as retrieved
             self.resolved_dependencies.add(nb_object_class)

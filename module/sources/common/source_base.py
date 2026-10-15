@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2026 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2026 netbox-sync team. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -42,6 +42,10 @@ class SourceBase:
             return True
 
         return False
+
+    # NetBox exempts addresses with these roles from its uniqueness check, they are
+    # meant to exist on more than one interface at the same time
+    non_unique_ip_roles = ("anycast", "vip", "vrrp", "hsrp", "glbp", "carp")
 
     # stub function to implement a finish call for each source
     def finish(self):
@@ -162,7 +166,12 @@ class SourceBase:
 
         # grab current data
         for interface in self.inventory.get_all_interfaces(device_vm_object):
-            int_mac = grab(interface, "data.mac_address")
+            # from NetBox 4.2 on 'mac_address' is a read-only leftover of the last NetBox read which sources
+            # don't update. Use the current primary MAC address object instead.
+            if version.parse(self.inventory.netbox_api_version) >= version.parse("4.2.0"):
+                int_mac = grab(grab(interface, "data.primary_mac_address"), "data.mac_address")
+            else:
+                int_mac = grab(interface, "data.mac_address")
             int_name = grab(interface, "data.name")
 
             if interface_exclude_filter is not None and int_name is not None and \
@@ -293,7 +302,7 @@ class SourceBase:
         return current_longest_matching_prefix
 
     def add_update_interface(self, interface_object, device_object, interface_data, interface_ips=None,
-                             vmware_object=None):
+                             vmware_object=None, keep_undiscovered_ips=False):
         """
         Adds/Updates an interface to/of a NBVM or NBDevice including IP addresses.
         Validates/enriches data in following order:
@@ -318,6 +327,8 @@ class SourceBase:
             a list of ip addresses which are assigned to this interface
         vmware_object: vim.HostSystem | vim.VirtualMachine
             object to add to list of objects to reevaluate
+        keep_undiscovered_ips: bool
+            if True, keep the existing IPs of an interface the source discovered no IPs for
 
         Returns
         -------
@@ -408,8 +419,9 @@ class SourceBase:
             # if a new interface or not matching assigned MAC address, try to find an existing unassigned mac address
             if primary_mac_address_object is None:
                 for mac_address_object in self.inventory.get_all_items(NBMACAddress):
+                    # an object already assigned to this very interface is the one we want, not a duplicate
                     if (grab(mac_address_object, "data.mac_address") == interface_mac_address and
-                            grab(mac_address_object, "data.assigned_object_id") is None):
+                            grab(mac_address_object, "data.assigned_object_id") in (None, interface_object)):
                         primary_mac_address_object = mac_address_object
                         break
 
@@ -500,11 +512,33 @@ class SourceBase:
                     log.warning(f"{matching_ip_prefix.name} got wrong format. Unable to add IP address to NetBox")
                     continue
 
+            # If skip_fhrp_group_ips is set and this address is already assigned to an FHRP
+            # group in NetBox, leave it on the FHRP group instead of rebinding it to this
+            # interface (issue #445). The whole inventory is scanned for a match on this
+            # address, so the outcome does not depend on inventory order, and only a
+            # candidate in the same VRF counts, so an unrelated FHRP-group IP does not cause
+            # this address to be skipped and every regular IP to be unbound (issue #476).
+            if self.settings.skip_fhrp_group_ips:
+                skip_fhrp_ip = False
+                for ip in self.inventory.get_all_items(NBIPAddress):
+                    if grab(ip, "data.assigned_object_type", fallback="") != "ipam.fhrpgroup":
+                        continue
+                    if not grab(ip, "data.address", fallback="").startswith(f"{ip_object.ip.compressed}/"):
+                        continue
+                    if possible_ip_vrf != grab(ip, "data.vrf"):
+                        continue
+                    log.info(f"IP address '{grab(ip, 'data.address')}' is assigned to an FHRP Group and "
+                             f"skip_fhrp_group_ips is set to True, skipping.")
+                    skip_fhrp_ip = True
+                    break
+                if skip_fhrp_ip is True:
+                    continue
+
             # try to find matching IP address object
             this_ip_object = None
             skip_this_ip = False
+            non_unique_ip_role = None
             for ip in self.inventory.get_all_items(NBIPAddress):
-
                 # check if address matches (without prefix length)
                 ip_address_string = grab(ip, "data.address", fallback="")
 
@@ -548,6 +582,16 @@ class SourceBase:
                     this_ip_object = ip
                     break
 
+                # an address whose role marks it as non unique belongs on several interfaces at
+                # the same time, so this interface gets an object of its own rather than taking
+                # this one over. Keep looking, this interface may already have its own object
+                current_ip_role = ip.get_role()
+                if current_ip_role in self.non_unique_ip_roles:
+                    log.debug(f"{ip.name} '{ip.get_display_name()}' is a '{current_ip_role}' address and "
+                              f"can be assigned to multiple interfaces at the same time.")
+                    non_unique_ip_role = current_ip_role
+                    continue
+
                 # get current IP interface status
                 current_nic_enabled = grab(current_ip_nic, "data.enabled", fallback=True)
                 this_nic_enabled = grab(interface_object, "data.enabled", fallback=True)
@@ -569,12 +613,6 @@ class SourceBase:
                               f"IP will be assigned to this interface.")
 
                     this_ip_object = ip
-
-                if grab(ip, "data.role.value") == "anycast":
-                    log.debug(f"{ip.name} '{ip.get_display_name()}' is an Anycast address and "
-                              f"can be assigned to multiple interfaces at the same time.")
-                    skip_this_ip = True
-                    break
 
                 if current_nic_enabled == this_nic_enabled:
 
@@ -652,6 +690,10 @@ class SourceBase:
                 nic_ip_data["tenant"] = ip_tenant
 
             if not isinstance(this_ip_object, NBIPAddress):
+
+                if non_unique_ip_role is not None:
+                    nic_ip_data["role"] = non_unique_ip_role
+
                 log.debug(f"No existing {NBIPAddress.name} object found. Creating a new one.")
 
                 this_ip_object = self.inventory.add_object(NBIPAddress, data=nic_ip_data, source=self)
@@ -665,14 +707,30 @@ class SourceBase:
 
             ip_address_objects.append(this_ip_object)
 
+        # keyed on what the source reported, not on what survived parsing: an unusable address
+        # is still a statement that the interface was seen
+        skip_ip_removal = keep_undiscovered_ips is True and len(interface_ips or list()) == 0
+
+        # guest tools which report as running but hand back no interface at all are broken
+        # (seen on old TMOS releases), not a statement that every address is gone. Keep what is
+        # in NetBox instead of tearing it off on every run. A real removal still reports the
+        # interface, just without an address, so that case is unaffected
+        reported_interfaces = grab(vmware_object, "guest.net")
+        if type(device_object) == NBVM and isinstance(reported_interfaces, list) and \
+                len(reported_interfaces) == 0:
+            log.debug(f"VM '{device_object.name}' guest tools report no network interface at all, "
+                      f"keeping the addresses currently assigned in NetBox")
+            skip_ip_removal = True
+
         for current_ip in interface_object.get_ip_addresses():
 
-            if skip_ip_handling is True:
+            if skip_ip_handling is True or skip_ip_removal is True:
                 continue
 
-            if grab(current_ip, "data.role.value") == "anycast":
-                log.debug2(f"{current_ip.name} '{current_ip.get_display_name()}' is an Anycast address and will "
-                          f"NOT be deleted from interface")
+            current_ip_role = current_ip.get_role()
+            if current_ip_role in self.non_unique_ip_roles:
+                log.debug2(f"{current_ip.name} '{current_ip.get_display_name()}' is a '{current_ip_role}' address "
+                           f"and will NOT be deleted from interface")
                 continue
 
             if current_ip not in ip_address_objects:
@@ -964,7 +1022,8 @@ class SourceBase:
             # try find matching VLAN by group
             if grab(vlan, "data.group") is not None:
                 vlan_group = grab(vlan, "data.group")
-                if vlan_group.matches_site_cluster(vlan_site, vlan_cluster):
+                if isinstance(vlan_group, NetBoxObject) and \
+                        vlan_group.matches_site_cluster(vlan_site, vlan_cluster):
                     vlan_object_by_group = vlan
                     break
 
