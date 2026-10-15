@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  Copyright (c) 2020 - 2026 Ricardo Bartels. All rights reserved.
+#  Copyright (c) 2020 - 2026 netbox-sync team. All rights reserved.
 #
 #  netbox-sync.py
 #
@@ -89,7 +89,7 @@ class VMWareConfig(ConfigBase):
                               If a filter is unset it will be ignored. Filters are all treated as regex expressions!
                               If more then one expression should match, a '|' needs to be used
                               """,
-                              config_example="""Example: (exclude all VMs with "replica" in their name 
+                              config_example="""Example: (exclude all VMs with "replica" in their name
                               and all VMs starting with "backup"): vm_exclude_filter = .*replica.*|^backup.*""",
                               options=[
                                 ConfigOption("cluster_exclude_filter",
@@ -133,6 +133,22 @@ class VMWareConfig(ConfigBase):
                          config_example="VeeamBackup_.*"
                          ),
 
+            ConfigOption("vm_exclude_disk_sync",
+                         str,
+                         description="""defines a comma separated list of VM names (regex) where disk synchronization 
+                         will be excluded. A VM matching this filter will still be synced to NetBox,
+                         but its disk information won't be updated.
+                         """,
+                         config_example="backup-.*, temp-.*"
+                         ),
+            ConfigOption("vm_exclude_disk_sync_by_tag",
+                         str,
+                         description="""defines a comma separated list of vCenter tags which (if assigned to a VM)
+                         will exclude this VM from disk synchronization. A VM with this tag will still be synced 
+                         to NetBox, but its disk information won't be updated.
+                         """,
+                         config_example="backup-vm, veeam-job"
+                         ),
             ConfigOptionGroup(title="relations",
                               options=[
                                 ConfigOption("cluster_site_relation",
@@ -159,6 +175,27 @@ class VMWareConfig(ConfigBase):
                                              description="""Same as cluster site but on host level.
                                              If unset it will fall back to cluster_site_relation""",
                                              config_example="nyc02.* = New York, ffm01.* = Frankfurt"),
+                                ConfigOption("cluster_scope_type_relation",
+                                             str,
+                                             description="""This option defines the scope type for a cluster.
+                                             The scope type can be 'dcim.site', 'dcim.sitegroup', 'dcim.location' or 'dcim.region'.
+                                             This is done with a comma separated key = value list.
+                                             Can be set to "<NONE>" to not assign a scope type.
+                                             Note: this does not remove scope types from existing clusters in NetBox.
+                                               key: defines a cluster name as regex
+                                               value: defines the NetBox scope type name (use quotes if name contains commas)
+                                             """,
+                                             config_example="Cluster_NYC = dcim.site, Cluster_FFM = dcim.sitegroup, Cluster_BER = dcim.location"),
+                                ConfigOption("cluster_scope_id_relation",
+                                             str,
+                                             description="""This option defines the scope id for a cluster.
+                                             The scope id is the NetBox ID of the scope type.
+                                             This is done with a comma separated key = value list.
+                                             To be used in combination with the 'cluster_scope_type_relation'.
+                                               key: defines a cluster name as regex
+                                               value: defines the NetBox scope id (use quotes if name contains commas)
+                                             """,
+                                             config_example="Cluster_NYC = 1, Cluster_FFM.* = 2, Cluster_BER = 7"),
                                 ConfigOption("cluster_tenant_relation",
                                              str,
                                              description="""\
@@ -218,6 +255,31 @@ class VMWareConfig(ConfigBase):
                          description="""Try to find existing host based on serial number. This can cause issues
                          with blade centers if VMWare does not report the blades serial number properly.""",
                          default_value=True),
+
+            ConfigOption("match_vm_by_serial",
+                         bool,
+                         description="""Fall back to matching VMs by serial number (BIOS UUID) if no name+cluster
+                         match is found. Can misattribute a VM to an unrelated NetBox object if the same UUID is
+                         reported by multiple sources, e.g. a cloned/migrated VM whose stale copy overwrites the
+                         real VM's cluster/site/status.""",
+                         default_value=True),
+
+            ConfigOption("match_vm_by_mac_address",
+                         bool,
+                         description="""Fall back to matching VMs by vNIC MAC address if no name+cluster match is
+                         found. Runs before 'match_vm_by_serial', so disabling that option alone is not enough if
+                         MACs are also shared. Same misattribution risk as match_vm_by_serial, triggered by a
+                         cloned/copied VM with a duplicate MAC.""",
+                         default_value=True),
+
+            ConfigOption("match_vm_by_ip_address",
+                         bool,
+                         description="""Fall back to matching VMs by primary IP if no name/cluster/MAC/serial
+                         match is found. Same misattribution risk, triggered even transiently, e.g. a duplicate VM
+                         in another cluster briefly powered on with the same IP. Not guaranteed to self-correct
+                         afterwards, since vCenter can keep reporting a cached IP after power-off.""",
+                         default_value=True),
+
             ConfigOption("collect_hardware_asset_tag",
                          bool,
                          description="Attempt to collect asset tags from vCenter hosts",
@@ -293,6 +355,11 @@ class VMWareConfig(ConfigBase):
                          description="""If the VMware Site Recovery Manager is used to can skip syncing
                          placeholder/replicated VMs from fail-over site to NetBox.""",
                          default_value=False),
+            ConfigOption("skip_fhrp_group_ips",
+                         bool,
+                         description="""If an IP address is assigned to a FHRP group (like HSRP, VRRP, GLBP)
+                         then this IP address will be skipped and not synced to NetBox to prevent incorrect syncing.""",
+                         default_value=False),
             ConfigOption("vm_status_on_create",
                          str,
                          description="""defines the status a VM gets assigned in NetBox when netbox-sync
@@ -301,7 +368,7 @@ class VMWareConfig(ConfigBase):
                          as i.e. 'planned' until changed manually in NetBox.
                          possible values: offline, active, planned, staged, failed, decommissioning
                          """,
-                         default_value="active"),
+                         config_example="planned"),
             ConfigOption("vm_status_preserve",
                          str,
                          description="""defines a comma separated list of NetBox VM statuses which will be
@@ -311,7 +378,7 @@ class VMWareConfig(ConfigBase):
                          Set to an empty value to always update the VM status.
                          possible values: offline, active, planned, staged, failed, decommissioning
                          """,
-                         default_value="planned, staged, decommissioning"),
+                         config_example="planned, staged, decommissioning"),
             ConfigOption("host_status_preserve",
                          str,
                          description="""defines a comma separated list of NetBox device statuses which will be
@@ -332,7 +399,7 @@ class VMWareConfig(ConfigBase):
             ConfigOptionGroup(title="tag source",
                               description="""\
                               sync tags assigned to clusters, hosts and VMs in vCenter to NetBox
-                              INFO: this requires the installation of the 'vsphere-automation-sdk',
+                              INFO: this requires the installation of the 'vcf-sdk' package,
                               see docs about installation possible values:
                                 * object : the host or VM itself
                                 * parent_folder_1 : the direct folder this object is organized in (1 level up)
@@ -347,6 +414,17 @@ class VMWareConfig(ConfigBase):
                                 ConfigOption("host_tag_source", str),
                                 ConfigOption("vm_tag_source", str)
                               ]),
+            ConfigOption("tag_name_include_category",
+                         bool,
+                         description="""\
+                         If enabled, vCenter tag names synced to NetBox will include the vCenter category as a
+                         prefix in the format 'CategoryName:TagName'. Useful if TagName and CategoryName is used 
+                         as key/value pairs in vCenter.
+                         When changed, existing synced tags are replaced on
+                         the next run. Note: vm_exclude_by_tag_filter entries must use 'CategoryName:TagName'
+                         format when this option is enabled.
+                         """,
+                         default_value=False),
             ConfigOption("sync_custom_attributes",
                          bool,
                          description="""sync custom attributes defined for hosts and VMs
@@ -368,6 +446,19 @@ class VMWareConfig(ConfigBase):
                                              str,
                                              config_example="config.uuid")
                               ]),
+            ConfigOption("vm_guest_hostname_custom_field",
+                         str,
+                         description="""defines the name of a NetBox custom field which is used to store the
+                         hostname reported by VMware Tools from inside the guest OS (vCenter property
+                         'guest.hostName'). This is independent of the vCenter VM inventory name and can be
+                         used to detect naming drift between the vCenter VM name and the actual OS hostname.
+                         The custom field must be of type "Text" and assigned to the "Virtual Machine" object
+                         type. If it does not exist yet, it will be created automatically, the same way other
+                         netbox-sync managed custom fields are created.
+                         If this option is unset (default) the guest hostname is not synced.
+                         If VMware Tools does not report a hostname (not installed, not running or no data yet)
+                         the custom field is left untouched so any previously synced value is preserved.""",
+                         config_example="vmware_guest_hostname"),
             ConfigOption("set_source_name_as_cluster_group",
                          bool,
                          description="""this will set the sources name as cluster group name instead of the datacenter.
@@ -420,8 +511,8 @@ class VMWareConfig(ConfigBase):
 
             ConfigOption("track_vm_host",
                          bool,
-                         description="""enabling this option will add the ESXi host
-                         this VM is running on to the VM details""",
+                         description="""fills the 'Host Device' field of a VM in NetBox with
+                         the ESXi host it currently runs on. Needs NetBox 3.3 or newer""",
                          default_value=False),
             ConfigOption("overwrite_device_interface_name",
                          bool,
@@ -499,6 +590,22 @@ class VMWareConfig(ConfigBase):
                          The same behavior also applies for VM disk sizes.""",
                          default_value=True
                          ),
+            ConfigOption("skip_host_nics",
+                         bool,
+                         description="""Skip creating or updating host physical nics in NetBox. Normal operation
+                         will maintain all physical nics in netbox. This option will skip this part.""" ,
+                         default_value=False
+                         ),
+            ConfigOption("sync_host_cables",
+                         bool,
+                         description="""Create cables in NetBox between the physical interfaces (pNICs) of an
+                         ESXi host and the switch ports which are reported as CDP/LLDP neighbors by this host.
+                         A cable is only created if the reported switch and the reported switch port both
+                         already exist in NetBox and if neither of the two interfaces is cabled yet. Cables
+                         are visible objects which are usually maintained by hand, that's why this is
+                         disabled by default.""",
+                         default_value=False
+                         ),
 
             # removed settings
             ConfigOption("netbox_host_device_role",
@@ -550,6 +657,25 @@ class VMWareConfig(ConfigBase):
             if option.key in ["vm_exclude_by_tag_filter", "host_exclude_by_tag_filter"]:
 
                 option.set_value(quoted_split(option.value))
+
+                continue
+
+            if option.key == "vm_exclude_disk_sync_by_tag":
+
+                option.set_value(quoted_split(option.value))
+
+                continue
+
+            if option.key == "vm_exclude_disk_sync":
+
+                re_compiled = None
+                try:
+                    re_compiled = re.compile(option.value)
+                except Exception as e:
+                    log.error(f"Problem parsing regular expression for '{self.source_name}.{option.key}': {e}")
+                    self.set_validation_failed()
+
+                option.set_value(re_compiled)
 
                 continue
 
